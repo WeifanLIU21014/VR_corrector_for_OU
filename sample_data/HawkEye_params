@@ -341,7 +341,7 @@ fields = {
     raw_name = "vcor_mean",
     filtered_name = "",
     units = "m/s",
-    color_map = "vel.colors",
+    color_map = "bwr.colors",
     shortcut = "4"
   }
   ,
@@ -350,7 +350,7 @@ fields = {
     raw_name = "vcor_median",
     filtered_name = "",
     units = "m/s",
-    color_map = "vel.colors",
+    color_map = "bwr.colors",
     shortcut = "5"
   }
   ,
@@ -359,7 +359,7 @@ fields = {
     raw_name = "vcor_cmean_sc",
     filtered_name = "",
     units = "m/s",
-    color_map = "vel.colors",
+    color_map = "bwr.colors",
     shortcut = "6"
   }
   ,
@@ -368,7 +368,7 @@ fields = {
     raw_name = "vcor_cmean",
     filtered_name = "",
     units = "m/s",
-    color_map = "vel.colors",
+    color_map = "bwr.colors",
     shortcut = "7"
   }
   ,
