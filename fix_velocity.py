@@ -314,7 +314,8 @@ def calc_mae(vel, vel_nyq, window=7):
 
 def unwrap_velocity_skimage(vel, nyquist_velocity, slices):
     unwrap_vel = vel.copy()
-    phase =  np.pi * vel / nyquist_velocity
+    phase  = np.pi * smooth(vel, np.full(vel.shape[0], nyquist_velocity)) / nyquist_velocity
+    #phase =  np.pi * vel / nyquist_velocity
 
     for slice in slices:
         phase_slice = phase[slice].copy()
