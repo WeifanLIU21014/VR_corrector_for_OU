@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.ndimage import laplace, median_filter, generic_filter
 from scipy.signal import filtfilt, butter, detrend
+from skimage.restoration import unwrap_phase
 
 #X band
 #b, a = butter(6, 0.4)
@@ -13,7 +14,7 @@ def calc_dualprf_velocity(vel, vel_nyq, slices):
     vel_dualprf = vel.copy()
 
     # compute dualprf velocity
-    for isweep, sweep_slice in enumerate(slices):
+    for sweep_slice in slices:
         vel_sweep         = vel[sweep_slice]
         vel_nyq_sweep     = vel_nyq[sweep_slice]
 
@@ -31,7 +32,7 @@ def calc_dualprf_velocity(vel, vel_nyq, slices):
         ## V_i - V_i-1 / (2 (Vny_i - Vny_i-1))
         for iray, dvel_nyq_ray in enumerate(dvel_nyq): dvel_sweep[iray] /= 2*dvel_nyq_ray
         l = dvel_sweep
-        
+
         n = np.ma.round(l/R)
         n1, n2 = -l + (R-1) * n, -l + R * n
 
@@ -41,7 +42,7 @@ def calc_dualprf_velocity(vel, vel_nyq, slices):
         nray = vel_nyq_sweep.size
 
         for iray in range(1, nray-1):
-            if vel_nyq_sweep[iray] == vel_nyq_h: 
+            if vel_nyq_sweep[iray] == vel_nyq_h:
                 n = n1[iray-1] #n1_l
                 if n.mask.all(): n = n1[iray]  #n1_r
 
@@ -50,7 +51,7 @@ def calc_dualprf_velocity(vel, vel_nyq, slices):
                 if n.mask.all(): n = n2[iray] #n2_r
 
             if iray == 1:
-                if vel_nyq_sweep[iray-1] == vel_nyq_h: 
+                if vel_nyq_sweep[iray-1] == vel_nyq_h:
                     nn = n1[iray-1]
                 else:
                     nn = n2[iray-1]
@@ -62,7 +63,7 @@ def calc_dualprf_velocity(vel, vel_nyq, slices):
                     nn = n1[iray]
                 else:
                     nn = n2[iray]
-                    
+
                 vel_dualprf_sweep[iray+1] = vel_sweep[iray+1] + nn * 2 * vel_nyq_sweep[iray+1]
 
             vel_dualprf_sweep[iray] = vel_sweep[iray] + n * 2 * vel_nyq_sweep[iray]
@@ -84,7 +85,7 @@ def mad_based_outlier(points, thresh=4.5):
     return modified_z_score > thresh
 
 
-def correct_dualprf_velocity_error(vel, vel_nyq, slices, size, reverse=False, offset_factor=0.25, azi_first=True):
+def correct_dualprf_velocity_error(vel, vel_nyq, slices, size, reverse=False, offset_factor=0.25):
     vel_corrected = np.full_like(vel, np.nan)
     ray_size, gate_size = size
 
@@ -100,12 +101,9 @@ def correct_dualprf_velocity_error(vel, vel_nyq, slices, size, reverse=False, of
         vel_sweep = vel[slice]
         vel_nyq_sweep = vel_nyq[slice]
 
-        data = vel_sweep.data
-        mask = vel_sweep.mask
+        nray, ngate = vel_sweep.shape
 
-        nray, ngate = data.shape
-
-        dummy_data = np.where((~mask), data, np.nan)
+        dummy_data = vel_sweep.filled(np.nan)
 
         ### pad along azimuth axis in wrap mode
         dummy_data = np.pad(dummy_data, ((ray_size, ray_size), (0,0)), 'wrap')
@@ -114,21 +112,48 @@ def correct_dualprf_velocity_error(vel, vel_nyq, slices, size, reverse=False, of
         ### pad along azimuth axis in reflect mode
         dummy_data = np.pad(dummy_data, ((0, 0), (gate_size, gate_size)), 'reflect')
 
-        ray_start = ray_size
-        ray_end   = nray+ray_size
-        ray_step  = ray_size
+
+        ### loop index
+        gate_start = gate_size
+        gate_end   = ngate+gate_size
+        #gate_index = list(range(gate_start, gate_end, max(int(gate_size/2),1)))
+        gate_index = list(range(gate_start, gate_end))
+        if gate_index[-1] != gate_end - 1:
+            gate_index.append(gate_end - 1)
+
+
+        ray_start  = ray_size
+        ray_end    = nray+ray_size
+        #ray_index  = list(range(ray_start, ray_end, max(int(ray_size/2),1)))
+        ray_index  = list(range(ray_start, ray_end))
+        if ray_index[-1] != ray_end - 1:
+            ray_index.append(ray_end - 1)
 
         if reverse:
-            ray_start = nray+ray_size
-            ray_end   = ray_size
-            ray_step  = -ray_size
+            ray_index.reverse()
 
-        for igate in range(gate_size, ngate+gate_size, int(gate_size/2)):
-            for iray in range(ray_start, ray_end, max(int(ray_step/2), 1)):
+
+        for igate in gate_index:
+            for iray in ray_index:
                 nyquist_velocitys = np.repeat(dummy_vel_nyq[iray-ray_size:iray+ray_size+1], 2*gate_size+1).reshape(-1, 2*gate_size+1)
+
+                ### detrend along ray
+                #detrend_data = []
+                #for i in range(iray-ray_size, iray+ray_size+1):
+                #    dummy_data_ray = dummy_data[i, igate-gate_size:igate+gate_size+1].copy()
+                #    mask = np.isnan(dummy_data_ray)
+
+                #    dummy_data_ray_good = dummy_data_ray[ ~mask ]
+                #    if dummy_data_ray_good.size > 0:
+                #        dummy_data_ray[ ~mask ] = detrend(dummy_data_ray_good)
+
+                #    detrend_data.append( dummy_data_ray )
+
+                #detrend_data = np.array(detrend_data)
 
                 ### flatten array
                 dummy_data_1d = dummy_data[iray-ray_size:iray+ray_size+1, igate-gate_size:igate+gate_size+1].ravel()
+                #detrend_data_1d = detrend_data.ravel()
                 nyquist_velocitys_1d = nyquist_velocitys.ravel()
                 mask = np.isnan(dummy_data_1d)
 
@@ -136,10 +161,12 @@ def correct_dualprf_velocity_error(vel, vel_nyq, slices, size, reverse=False, of
 
                 ### take valid data only
                 dummy_data_1d_good = dummy_data_1d[ ~mask ]
+                #detrend_data_1d_good = detrend_data_1d[ ~mask ]
                 nyquist_velocitys_1d_good = nyquist_velocitys_1d[ ~mask ]
 
                 ### outlier checker
-                outliers = mad_based_outlier(detrend(dummy_data_1d_good), thresh=3.5)
+                outliers = mad_based_outlier(dummy_data_1d_good, thresh=3.5)
+                #outliers = mad_based_outlier(detrend_data_1d_good, thresh=3.5)
                 if np.count_nonzero(outliers) == 0: continue
 
                 ### take outlier and compute mean
@@ -160,15 +187,14 @@ def correct_dualprf_velocity_error(vel, vel_nyq, slices, size, reverse=False, of
 
                 ### put data back
                 dummy_data[iray-ray_size:iray+ray_size+1, igate-gate_size:igate+gate_size+1] = dummy_data_1d.reshape((2*ray_size+1, 2*gate_size+1))
-                
+
         vel_corrected[slice] = dummy_data[ray_size:nray+ray_size, gate_size:ngate+gate_size]
 
     return vel_corrected
 
 
-def local_median_filter_recursive(vel, vel_nyq, slices, size, offset_factor=0.25):
+def local_median_filter_recursive(vel, vel_nyq, slices, size, offset_factor=0.25, recursive_ray=False, recursive_gate=False):
     vel_filter = vel.copy()
-    med_val = vel.copy()
     ray_size, gate_size = size
 
     ### check values in kernel
@@ -182,44 +208,61 @@ def local_median_filter_recursive(vel, vel_nyq, slices, size, offset_factor=0.25
         vel_sweep = vel[slice]
         vel_nyq_sweep = vel_nyq[slice]
 
-        data = vel_sweep.data
-        mask = vel_sweep.mask
+        nray, ngate = vel_sweep.shape
 
-        nray, ngate = data.shape
-
-        dummy_data = np.where((~mask), data, np.nan)
-        dummy_med  = dummy_data.copy()
+        dummy_data = vel_sweep.filled(np.nan)
 
         ### pad along azimuth axis in wrap mode
         dummy_data = np.pad(dummy_data, ((ray_size, ray_size), (0,0)), 'wrap')
+        dummy_vel_nyq = np.pad(vel_nyq_sweep, ray_size, 'wrap')
 
         ### pad along azimuth axis in reflect mode
         dummy_data = np.pad(dummy_data, ((0, 0), (gate_size, gate_size)), 'reflect')
 
-        for iray in range(ray_size, nray+ray_size):
-            nyquist_velocity = vel_nyq_sweep[iray-ray_size]
-            for igate in range(gate_size, ngate+gate_size):
-                med = np.nanmedian(
-                    dummy_data[iray-ray_size:iray+ray_size+1, igate-gate_size:igate+gate_size+1]
-                )
-                vel_diff = (med - dummy_data[iray, igate]) / (2 * nyquist_velocity)
+        if recursive_ray: ray_step = 1
+        else: ray_step = 2*ray_size+1
 
-                if not np.isnan(vel_diff): 
-                    if   vel_diff >  offset_factor: vel_diff -= offset_factor
-                    elif vel_diff < -offset_factor: vel_diff += offset_factor
+        if recursive_gate: gate_step = 1
+        else: gate_step = 2*gate_size+1
 
-                    nn = round(vel_diff)
-                    dummy_data[iray, igate] += nn * 2 * nyquist_velocity
 
-                    #save median value
-                    dummy_med[iray-ray_size, igate-gate_size] = med
+        for iray in range(ray_size, nray+ray_size, ray_step):
+            nyquist_velocity = np.repeat(
+                    dummy_vel_nyq[iray-ray_size:iray+ray_size+1], 2*gate_size+1
+                ).reshape(-1, 2*gate_size+1).ravel()
+            for igate in range(gate_size, ngate+gate_size, gate_step):
+                patch = dummy_data[iray-ray_size:iray+ray_size+1, igate-gate_size:igate+gate_size+1].ravel()
+                if np.all(np.isnan(patch)): continue
+
+                for _ in range(2):
+                    med      = np.nanmedian(patch)
+                    vel_diff = (med - patch) / (2 * nyquist_velocity)
+                    vel_diff[ vel_diff >  offset_factor ] -= offset_factor
+                    vel_diff[ vel_diff < -offset_factor ] += offset_factor
+
+                    nn = np.round(vel_diff)
+                    patch += nn * 2 *  nyquist_velocity
+
+                dummy_data[iray-ray_size:iray+ray_size+1, igate-gate_size:igate+gate_size+1] = \
+                    patch.reshape((2*ray_size+1,  2*gate_size+1))
+
+                #med = np.nanmedian(
+                #    dummy_data[iray-ray_size:iray+ray_size+1, igate-gate_size:igate+gate_size+1]
+                #)
+                #vel_diff = (med - dummy_data[iray, igate]) / (2 * nyquist_velocity)
+
+                #if not np.isnan(vel_diff):
+                #    if   vel_diff >  offset_factor: vel_diff -= offset_factor
+                #    elif vel_diff < -offset_factor: vel_diff += offset_factor
+
+                #    nn = round(vel_diff)
+                #    dummy_data[iray, igate] += nn * 2 * nyquist_velocity
 
         vel_filter[slice] = dummy_data[ray_size:nray+ray_size, gate_size:ngate+gate_size]
-        med_val[slice] = dummy_med
 
     vel_filter = np.ma.masked_invalid(vel_filter)
 
-    return vel_filter, med_val
+    return vel_filter
 
 
 def find_nyquist_velocity(vel, dual_prf_vel_nyq, prt_ratio):
@@ -242,7 +285,7 @@ def find_nyquist_velocity(vel, dual_prf_vel_nyq, prt_ratio):
 def calc_mae(vel, vel_nyq, window=7):
     if window % 2 == 0:
         raise ValueError(f'window must be odd number')
-    
+
     mae   = vel.copy()
     mae[...] = np.nan
     nray  = vel_nyq.size
@@ -251,7 +294,7 @@ def calc_mae(vel, vel_nyq, window=7):
 
     for iray in range(nray):
         _good = ~vel[iray].mask
-        ngood = np.count_nonzero(_good) 
+        ngood = np.count_nonzero(_good)
         if ngood == 0: continue
 
         vel_good, nyquist_velocity = vel[iray, _good], vel_nyq[iray]
@@ -267,6 +310,20 @@ def calc_mae(vel, vel_nyq, window=7):
         mae[iray, _good] = MAE
 
     return mae
+
+
+def unwrap_velocity_skimage(vel, vel_nyq, slices):
+    unwrap_vel = vel.copy()
+    nyquist_velocity = np.min(vel_nyq)
+    phase = np.angle(np.exp(1j * np.pi * vel / nyquist_velocity))
+
+    for slice in slices:
+        unwrap_vel[slice] = unwrap_phase(
+            phase[slice], wrap_around=(True, False),
+        ) * nyquist_velocity / np.pi
+
+    return unwrap_vel
+
 
 
 def smooth(vel, vel_nyq):
@@ -296,25 +353,10 @@ def dealise_velocity(vel, vel_nyq, factor=1.4):
         if np.count_nonzero(_good) == 0: continue
 
         vel_good, nyquist_velocity = vel[iray, _good], vel_nyq[iray]
-        vel_diff = np.diff(vel_good)
-
-        ## if V_diff close to 2 * Vny, this is fold point
-        fold_indx = np.where(np.abs(vel_diff) > factor * nyquist_velocity)[0]
-
-        indx      = np.zeros_like(vel_good)
-        indx[ fold_indx + 1 ] = -np.sign(vel_diff[ fold_indx ])
-
-        NN = np.cumsum(indx)
-
-        vel_dealised_good = vel_good + 2 * nyquist_velocity * NN
-
-        ## fix sharp velocity
-        #sharp_indics = np.where(np.abs(np.diff(vel_dealised_good)) >= nyquist_velocity)[0]
-        #sharp_indics = np.where(np.abs(np.diff(vel_dealised_good)) >= 3.5)[0]
-        #if sharp_indics.size > 0:
-        #    vel_dealised_good[sharp_indics[0]+1:] += NN[sharp_indics[0]+1] * 2 * nyquist_velocity
-
-        vel_dealised[iray, _good] = vel_dealised_good
+        vel_dealised[iray, _good] = np.unwrap(
+            vel_good, factor*nyquist_velocity,
+            period=2*nyquist_velocity
+        )
 
     return vel_dealised
 
@@ -384,9 +426,9 @@ def calc_good_reference(vel, threshold=3):
 
 
 def driver_fix_velocity(
-    radar, 
-    band='X', 
-    mae_filter=False, 
+    radar,
+    band='X',
+    mae_filter=False,
     piecewise_corr=False,
     spectrum_width_filter=False,
 ):
@@ -423,7 +465,7 @@ def driver_fix_velocity(
         )
 
         return velocity_corrected
-    
+
     elif band == 'C':
         ### get prt ratio
         prt_ratio = radar.instrument_parameters['prt_ratio']['data']
@@ -455,18 +497,19 @@ def driver_fix_velocity(
 
         ### calculate dual prf velocity
         slices = list(radar.iter_slice())
+
         velocity_dualprf = calc_dualprf_velocity(velocity_alised_smth, nyquist_velocity_ray, slices)
 
-        input = velocity_dualprf
-        #sizes = [(5, 11), (11, 21)]
-        #offset_factors = [0.2, 0.2]
-        #for size, offset_factor in zip(sizes, offset_factors):
-        #    input, med  = local_median_filter_recursive(input, nyquist_velocity_ray, slices, size=size, offset_factor=offset_factor)
-
-        for size in [(9, 61), (7, 41), (5, 21), (5, 11)]:
-            input = correct_dualprf_velocity_error(input, nyquist_velocity_ray, slices, size=size, offset_factor=0.1)
-        velocity_dealised_smth = input
+        #input = velocity_dualprf
+        #input  = local_median_filter_recursive(input, nyquist_velocity_ray, slices, size=(7, 15), offset_factor=0.2, recursive_gate=True, recursive_ray=True)
+        #input  = local_median_filter_recursive(input, nyquist_velocity_ray, slices, size=(5, 21), offset_factor=0.2, recursive_gate=True)
+        #input  = local_median_filter_recursive(input, nyquist_velocity_ray, slices, size=(11, 21), offset_factor=0.2)
+        #input  = local_median_filter_recursive(input, nyquist_velocity_ray, slices, size=(11, 31), offset_factor=0.2, recursive_ray=True)
+        #for size in [(5, 21)]:
+        #    input = correct_dualprf_velocity_error(input, nyquist_velocity_ray, slices, size=size, offset_factor=0.1, reverse=False)
+        #    input = correct_dualprf_velocity_error(input, nyquist_velocity_ray, slices, size=size, offset_factor=0.1, reverse=True)
+        velocity_dealised_smth = velocity_dualprf #velocity_dualprf
         #velocity_dealised_smth = correct_dualprf_velocity_error(input, nyquist_velocity_ray, slices, size=(31, 51), reverse=False)
 
-        return velocity_dealised_smth
+        return velocity_dealised_smth, nyquist_velocity_ray
 
